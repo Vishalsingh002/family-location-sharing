@@ -59,8 +59,10 @@ class LocationTracker {
     this.currentPosition = { latitude, longitude, accuracy, speed, heading };
 
     mapManager.updateMyPosition(latitude, longitude, accuracy);
+
+    // 🟢 Clean Badge (Ab ±95m nahi dikhega, sirf clean Live GPS aayega)
     const accEl = document.getElementById('gpsAccuracyLabel');
-    if (accEl) accEl.innerHTML = `<i class="bi bi-broadcast text-success me-1"></i> GPS: ±${Math.round(accuracy)}m`;
+    if (accEl) accEl.innerHTML = `<i class="bi bi-broadcast text-success me-1"></i> Live GPS`;
 
     const now = Date.now();
     if (app.token && (now - this.lastSentAt > 8000)) {
