@@ -64,13 +64,7 @@
 
 ## 🚀 Quick Start Guide
 
-### 1. Clone the Repository
-```bash
-git clone https://github.com/Vishalsingh002/family-location-sharing.git
-cd family-location-sharing
-```
-
-### 2. Create and Activate a Virtual Environment
+### 1. Create and Activate a Virtual Environment
 ```bash
 # Windows
 python -m venv venv
@@ -81,27 +75,12 @@ python3 -m venv venv
 source venv/bin/activate
 ```
 
-### 3. Install Dependencies
+### 2. Install Dependencies
 ```bash
 pip install -r requirements.txt
 ```
 
-### 4. Configure Environment Variables
-Create a `.env` file in the root directory:
-```ini
-APP_NAME=FamLocator
-SECRET_KEY=your_super_secret_jwt_key_here
-ALGORITHM=HS256
-ACCESS_TOKEN_EXPIRE_MINUTES=1440
-DATABASE_URL=sqlite:///./family_locator.db
-
-# Cloudinary CDN (Optional for avatar image uploads)
-CLOUDINARY_CLOUD_NAME=your_cloudinary_cloud_name
-CLOUDINARY_API_KEY=your_cloudinary_api_key
-CLOUDINARY_API_SECRET=your_cloudinary_api_secret
-```
-
-### 5. Start the Application Server
+### 3. Start the Application Server
 ```bash
 uvicorn backend.main:app --reload
 ```
