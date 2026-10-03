@@ -90,6 +90,38 @@ Open your browser and visit:
 
 ---
 
+## 🌐 Deploy to Render
+
+You can easily deploy **FamLocator** to [Render](https://render.com) using either **1-Click Blueprint** or **Manual Web Service Setup**.
+
+### Option A: Deploy via Render Blueprint (Recommended)
+1. Fork or push this repository to your GitHub account: `https://github.com/Vishalsingh002/family-location-sharing`.
+2. Go to your [Render Dashboard](https://dashboard.render.com).
+3. Click **New +** and select **Blueprint**.
+4. Connect your GitHub repository `family-location-sharing`.
+5. Render will automatically detect [`render.yaml`](render.yaml) and configure the build command, start command, and environment variables.
+6. Click **Apply** to deploy!
+
+### Option B: Deploy as a Web Service Manually
+1. In your [Render Dashboard](https://dashboard.render.com), click **New +** > **Web Service**.
+2. Connect your GitHub repository.
+3. Configure the settings:
+   - **Name:** `famlocator` (or your preferred name)
+   - **Runtime:** `Python 3`
+   - **Build Command:** `pip install -r requirements.txt`
+   - **Start Command:** `uvicorn backend.main:app --host 0.0.0.0 --port $PORT`
+   - **Plan:** Free
+4. Under **Environment Variables**, add:
+   - `APP_NAME`: `FamLocator`
+   - `SECRET_KEY`: *(Generate a secure random string)*
+   - `ALGORITHM`: `HS256`
+   - `ACCESS_TOKEN_EXPIRE_MINUTES`: `525600`
+   - `DATABASE_URL`: `sqlite:///./family_locator.db`
+   - *(Optional)* `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET` for profile avatar CDN.
+5. Click **Create Web Service**. Render will install dependencies and start the app with a live HTTPS URL!
+
+---
+
 ## 📱 Application Pages
 
 | Page | URL | Purpose |
