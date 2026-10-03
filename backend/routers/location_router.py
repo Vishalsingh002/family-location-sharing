@@ -1,6 +1,6 @@
 import math
 from datetime import datetime, timedelta
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import desc
 from backend.database import get_db
@@ -102,8 +102,9 @@ def get_live_family_locations(
                 "user_id": u.id,
                 "username": u.username,
                 "full_name": u.full_name,
+                "avatar_url": u.avatar_url,
                 "is_sharing": False,
-                "is_sos": u.is_sos_active,
+                "is_sos": bool(u.is_sos_active),
                 "location": None,
                 "distance_km": None
             })
@@ -122,8 +123,9 @@ def get_live_family_locations(
             "user_id": u.id,
             "username": u.username,
             "full_name": u.full_name,
+            "avatar_url": u.avatar_url,
             "is_sharing": u.is_sharing,
-            "is_sos": u.is_sos_active or latest.is_sos,
+            "is_sos": bool(u.is_sos_active),
             "distance_km": distance,
             "location": {
                 "latitude": lat,
@@ -138,14 +140,33 @@ def get_live_family_locations(
 @router.get("/history/{user_id}")
 def get_location_history(
     user_id: int,
-    hours: int = Query(default=8, ge=1, le=48),
+    hours: int = Query(default=24, ge=1, le=168),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    # Verify authorization (Must be self, mutual friend, or in the same circle)
+    if user_id != current_user.id:
+        is_friend = db.query(Friend).filter(Friend.user_id == current_user.id, Friend.friend_id == user_id).first()
+        my_groups = [m.group_id for m in db.query(GroupMember).filter(GroupMember.user_id == current_user.id).all()]
+        in_same_group = None
+        if my_groups:
+            in_same_group = db.query(GroupMember).filter(GroupMember.group_id.in_(my_groups), GroupMember.user_id == user_id).first()
+        
+        if not is_friend and not in_same_group:
+            raise HTTPException(status_code=403, detail="Unauthorized: You can only view location history for verified circle members.")
+
     since = datetime.utcnow() - timedelta(hours=hours)
     trail = db.query(Location).filter(
         Location.user_id == user_id,
         Location.timestamp >= since
     ).order_by(Location.timestamp.asc()).all()
 
-    return [{"latitude": l.latitude, "longitude": l.longitude} for l in trail]
+    return [
+        {
+            "latitude": l.latitude,
+            "longitude": l.longitude,
+            "timestamp": l.timestamp.strftime("%I:%M %p, %d %b") if l.timestamp else "",
+            "battery_level": l.battery_level
+        }
+        for l in trail
+    ]

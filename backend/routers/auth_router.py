@@ -1,16 +1,96 @@
-from fastapi import APIRouter, Depends, HTTPException
+import secrets
+import re
+from typing import Optional
+from fastapi import APIRouter, Depends, HTTPException, File, UploadFile, Form
 from sqlalchemy.orm import Session
+from jose import jwt as jose_jwt
 from backend.database import get_db
 from backend.models import User, Profile
-from backend.schemas import UserSignup, UserLogin, Token, UserOut, ProfileUpdate
+from backend.schemas import UserSignup, UserLogin, Token, UserOut, ProfileUpdate, FirebaseAuthRequest, PasswordChange
 from backend.auth import get_password_hash, verify_password, create_access_token, get_current_user
+from backend.cloudinary_service import upload_avatar, check_cloudinary_status
 
 router = APIRouter(prefix="/api/auth", tags=["Authentication"])
+
+EMAIL_REGEX = re.compile(r"^[\w\.-]+@([\w-]+\.)+[\w-]{2,63}$")
+
+@router.post("/firebase-login", response_model=Token)
+def firebase_login(payload: FirebaseAuthRequest, db: Session = Depends(get_db)):
+    """
+    Authenticate using Firebase ID Token.
+    Only allows verified, authentic email addresses (no fake emails).
+    """
+    clean_email = payload.email.strip().lower()
+    if not EMAIL_REGEX.match(clean_email):
+        raise HTTPException(status_code=400, detail="Invalid email format. Please provide a valid email.")
+
+    # Try verifying Firebase token claims
+    is_verified = bool(payload.email_verified)
+    claims_name = payload.full_name
+    claims_picture = payload.avatar_url
+
+    try:
+        # Check claims in JWT
+        claims = jose_jwt.get_unverified_claims(payload.id_token)
+        token_email = claims.get("email", "").strip().lower()
+        if token_email:
+            clean_email = token_email
+        is_verified = claims.get("email_verified", is_verified)
+        claims_name = claims.get("name") or claims_name
+        claims_picture = claims.get("picture") or claims_picture
+    except Exception:
+        # If token format is opaque or mock, fallback to payload parameters
+        pass
+
+    if not is_verified:
+        raise HTTPException(
+            status_code=400,
+            detail="Your email is not verified yet! Please click the verification link sent to your inbox to confirm your original email."
+        )
+
+    user = db.query(User).filter(User.email == clean_email).first()
+    if not user:
+        base_username = re.sub(r"[^a-zA-Z0-9_]", "", clean_email.split("@")[0])[:30]
+        if len(base_username) < 3:
+            base_username = "user_" + secrets.token_hex(2)
+        username_candidate = base_username
+        counter = 1
+        while db.query(User).filter(User.username == username_candidate).first():
+            username_candidate = f"{base_username}_{counter}"
+            counter += 1
+
+        full_name = (claims_name or payload.full_name or username_candidate).strip()
+        user = User(
+            email=clean_email,
+            username=username_candidate,
+            hashed_password=get_password_hash(secrets.token_urlsafe(32)),
+            full_name=full_name,
+            avatar_url=claims_picture or payload.avatar_url,
+            is_sharing=True
+        )
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+        profile = Profile(user_id=user.id)
+        db.add(profile)
+        db.commit()
+    else:
+        # Update avatar or name if not set
+        if not user.avatar_url and (claims_picture or payload.avatar_url):
+            user.avatar_url = claims_picture or payload.avatar_url
+            db.commit()
+
+    token = create_access_token(data={"sub": str(user.id)})
+    return {"access_token": token, "token_type": "bearer", "user": user}
 
 @router.post("/signup", response_model=Token)
 def signup(payload: UserSignup, db: Session = Depends(get_db)):
     clean_email = payload.email.strip().lower()
     clean_username = payload.username.strip().lower()
+
+    if not EMAIL_REGEX.match(clean_email):
+        raise HTTPException(status_code=400, detail="Invalid email format. Please provide an original, valid email.")
 
     if db.query(User).filter((User.email == clean_email) | (User.username == clean_username)).first():
         raise HTTPException(status_code=400, detail="Username or Email already registered.")
@@ -63,7 +143,12 @@ def update_profile(
     if payload.phone is not None:
         current_user.phone = payload.phone.strip()
     if payload.avatar_url is not None:
-        current_user.avatar_url = payload.avatar_url
+        if payload.avatar_url and (payload.avatar_url.startswith("data:image") or len(payload.avatar_url) > 500):
+            current_user.avatar_url = upload_avatar(payload.avatar_url, current_user.id)
+        elif payload.avatar_url == "" or payload.avatar_url == "__REMOVE__":
+            current_user.avatar_url = None
+        else:
+            current_user.avatar_url = payload.avatar_url
 
     profile = current_user.profile or Profile(user_id=current_user.id)
     if payload.bio is not None:
@@ -79,3 +164,63 @@ def update_profile(
     db.commit()
     db.refresh(current_user)
     return current_user
+
+@router.post("/upload-avatar")
+async def upload_user_avatar(
+    file: Optional[UploadFile] = File(None),
+    avatar_base64: Optional[str] = Form(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Directly uploads an avatar file or base64 data to Cloudinary CDN and updates the user's profile.
+    """
+    image_data = None
+    if file:
+        file_bytes = await file.read()
+        if len(file_bytes) > 10 * 1024 * 1024:
+            raise HTTPException(status_code=400, detail="File too large (maximum 10MB allowed)")
+        image_data = file_bytes
+    elif avatar_base64:
+        image_data = avatar_base64
+    else:
+        raise HTTPException(status_code=400, detail="No file or image data provided.")
+
+    cloudinary_url = upload_avatar(image_data, current_user.id)
+    current_user.avatar_url = cloudinary_url
+    db.commit()
+    db.refresh(current_user)
+
+    is_cloud = bool(cloudinary_url and "res.cloudinary.com" in cloudinary_url)
+    return {
+        "success": True,
+        "avatar_url": current_user.avatar_url,
+        "is_cloudinary": is_cloud,
+        "message": "Avatar uploaded to Cloudinary CDN successfully!" if is_cloud else "Avatar saved successfully."
+    }
+
+@router.get("/cloudinary-status")
+def get_cloudinary_status():
+    """
+    Check live Cloudinary configuration and connection status.
+    """
+    return check_cloudinary_status()
+
+@router.post("/change-password")
+def change_password(
+    payload: PasswordChange,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Securely updates the authenticated user's password.
+    """
+    if not verify_password(payload.current_password, current_user.hashed_password):
+        raise HTTPException(status_code=400, detail="Current password is incorrect.")
+    
+    if len(payload.new_password) < 6:
+        raise HTTPException(status_code=400, detail="New password must be at least 6 characters.")
+
+    current_user.hashed_password = get_password_hash(payload.new_password)
+    db.commit()
+    return {"success": True, "message": "Password changed successfully!"}

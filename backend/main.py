@@ -1,37 +1,19 @@
 import os
 from pathlib import Path
+from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
-from backend.database import engine, Base, SessionLocal
-from backend.models import User, Profile
-from backend.auth import get_password_hash
+load_dotenv()
+
+from backend.database import engine, Base
 from backend.routers import (
     auth_router, friends_router, groups_router, location_router, sos_router, notify_router
 )
 
 Base.metadata.create_all(bind=engine)
-
-with SessionLocal() as db:
-    if not db.query(User).filter(User.username == "admin").first():
-        default_user = User(
-            email="admin@example.com",
-            username="admin",
-            hashed_password=get_password_hash("password123"),
-            full_name="Admin Family",
-            phone="9876543210",
-            is_sharing=True
-        )
-        db.add(default_user)
-        db.commit()
-        db.refresh(default_user)
-        db.add(Profile(user_id=default_user.id))
-        db.commit()
-        print("\n" + "="*50)
-        print(">>> READY: Username: 'admin' | Password: 'password123'")
-        print("="*50 + "\n")
 
 app = FastAPI(title="FamLocator Web App")
 
@@ -58,6 +40,30 @@ app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
 @app.get("/")
 def serve_index():
     return FileResponse(FRONTEND_DIR / "index.html")
+
+@app.get("/login")
+def serve_login():
+    return FileResponse(FRONTEND_DIR / "login.html")
+
+@app.get("/signup")
+def serve_signup():
+    return FileResponse(FRONTEND_DIR / "signup.html")
+
+@app.get("/profile")
+def serve_profile():
+    return FileResponse(FRONTEND_DIR / "profile.html")
+
+@app.get("/map")
+def serve_map():
+    return FileResponse(FRONTEND_DIR / "index.html")
+
+@app.get("/auth_hero.jpg")
+def serve_auth_hero():
+    return FileResponse(FRONTEND_DIR / "auth_hero.jpg")
+
+@app.get("/favicon.ico.png")
+def serve_favicon():
+    return FileResponse(FRONTEND_DIR / "favicon.ico.png")
 
 if __name__ == "__main__":
     import uvicorn

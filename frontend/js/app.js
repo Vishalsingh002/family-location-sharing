@@ -8,10 +8,14 @@ class App {
     this.feedPollingInterval = null;
     this.mapInitialized = false;
     this.pendingAvatarBase64 = null;
+    this.currentHistoryUserId = null;
+    this.currentHistoryUserName = null;
+    this.currentHistoryHours = 24;
   }
 
   async init() {
     this.applyTheme(localStorage.getItem('theme') || 'dark');
+    this.initMobileGestures();
 
     if (this.token) {
       await this.loadCurrentUser();
@@ -21,13 +25,7 @@ class App {
   }
 
   showAuthScreen() {
-    const authEl = document.getElementById('authScreen');
-    const dashEl = document.getElementById('mainDashboard');
-    if (authEl) authEl.classList.remove('d-none');
-    if (dashEl) {
-      dashEl.classList.add('d-none');
-      dashEl.classList.remove('d-flex');
-    }
+    window.location.href = '/login';
   }
 
   async showDashboardScreen() {
@@ -40,12 +38,20 @@ class App {
     }
 
     if (!this.mapInitialized) {
-      await mapManager.init();
-      locationTracker.startTracking();
+      try {
+        await mapManager.init();
+      } catch (err) {
+        console.error('Map init warning:', err);
+      }
+      try {
+        locationTracker.startTracking();
+      } catch (err) {
+        console.error('Tracking init warning:', err);
+      }
       this.mapInitialized = true;
     }
     setTimeout(() => {
-      if (mapManager.map && mapManager.map.invalidateSize) {
+      if (window.mapManager && mapManager.map && mapManager.map.invalidateSize) {
         mapManager.map.invalidateSize();
       }
     }, 250);
@@ -73,24 +79,73 @@ class App {
     return fetch(url, options);
   }
 
-  async loadCurrentUser() {
-    try {
-      const res = await this.authFetch('/api/auth/me');
-      if (!res.ok) {
-        this.logout();
-        return;
+  startFeedPolling() {
+    if (this.feedPollingInterval) clearInterval(this.feedPollingInterval);
+    this.feedPollingInterval = setInterval(() => {
+      if (this.token) {
+        this.loadFamilyFeed();
+        this.loadNotifications();
       }
-      this.currentUser = await res.json();
-      await this.showDashboardScreen();
-      this.renderUserData();
-      this.updateSosUI();
-      this.startFeedPolling();
-      this.loadFamilyFeed();
-      this.loadGroups();
-      this.loadRequests();
+    }, 6000);
+  }
+
+  async loadNotifications() {
+    if (!this.token) return;
+    try {
+      const res = await this.authFetch('/api/notifications/');
+      if (!res.ok) return;
+      const notifs = await res.json();
+      const notifList = document.getElementById('notificationList');
+      if (notifList) {
+        if (!notifs || notifs.length === 0) {
+          notifList.innerHTML = '<div class="text-muted small text-center py-2">No new notifications</div>';
+        } else {
+          notifList.innerHTML = notifs.map(n => `
+            <div class="notification-item p-2 border-bottom">
+              <div class="fw-bold small">${n.title}</div>
+              <div class="text-muted small">${n.message}</div>
+            </div>
+          `).join('');
+        }
+      }
     } catch (e) {
-      await this.showDashboardScreen();
+      console.warn('Could not load notifications:', e);
     }
+  }
+
+  async loadCurrentUser() {
+    let res;
+    try {
+      res = await this.authFetch('/api/auth/me');
+    } catch (e) {
+      console.error('Network error during auth check:', e);
+      return;
+    }
+
+    if (!res || !res.ok) {
+      this.logout();
+      return;
+    }
+
+    try {
+      this.currentUser = await res.json();
+    } catch (e) {
+      console.error('User data parsing error:', e);
+      this.logout();
+      return;
+    }
+
+    // Authenticated! Show dashboard first
+    await this.showDashboardScreen();
+    this.renderUserData();
+    this.updateSosUI();
+    this.startFeedPolling();
+
+    // Async secondary loads (never throw or hide dashboard)
+    this.loadFamilyFeed().catch(e => console.warn('Family feed:', e));
+    this.loadNotifications().catch(e => console.warn('Notifications:', e));
+    this.loadGroups().catch(e => console.warn('Groups:', e));
+    this.loadRequests().catch(e => console.warn('Requests:', e));
   }
 
   renderUserData() {
@@ -100,7 +155,7 @@ class App {
 
     const navImg = document.getElementById('navUserAvatar');
     const navIcon = document.getElementById('navDefaultAvatarIcon');
-    if (this.currentUser.avatar_url && this.currentUser.avatar_url.startsWith('data:image')) {
+    if (this.currentUser.avatar_url) {
       if (navImg) {
         navImg.src = this.currentUser.avatar_url;
         navImg.classList.remove('d-none');
@@ -113,6 +168,11 @@ class App {
 
     const masterSwitch = document.getElementById('masterSharingSwitch');
     if (masterSwitch) masterSwitch.checked = Boolean(this.currentUser.is_sharing);
+
+    // Sync user profile to Firebase Firestore Cloud
+    if (window.firebaseAuth && typeof window.firebaseAuth.saveUserToFirestore === 'function') {
+      window.firebaseAuth.saveUserToFirestore(this.currentUser);
+    }
   }
 
   // Toggles the glowing "I AM SAFE NOW" button in the top bar
@@ -137,19 +197,43 @@ class App {
 
     const previewImg = document.getElementById('profileModalAvatarPreview');
     const placeholder = document.getElementById('profileModalAvatarPlaceholder');
+    const removeBtn = document.getElementById('btnRemoveAvatarPhoto');
     placeholder.innerText = (this.currentUser.full_name[0] || 'U').toUpperCase();
 
-    if (this.currentUser.avatar_url && this.currentUser.avatar_url.startsWith('data:image')) {
+    if (this.currentUser.avatar_url) {
       previewImg.src = this.currentUser.avatar_url;
-      previewImg.style.display = 'inline-block';
-      placeholder.style.display = 'none';
+      previewImg.classList.remove('d-none');
+      placeholder.classList.add('d-none');
+      if (removeBtn) removeBtn.classList.remove('d-none');
     } else {
-      previewImg.style.display = 'none';
-      placeholder.style.display = 'inline-flex';
+      previewImg.classList.add('d-none');
+      placeholder.classList.remove('d-none');
+      if (removeBtn) removeBtn.classList.add('d-none');
     }
 
     this.pendingAvatarBase64 = null;
+    this.checkCloudinaryStatus();
     new bootstrap.Modal(document.getElementById('profileModal')).show();
+  }
+
+  async checkCloudinaryStatus() {
+    const badgeEl = document.getElementById('cloudinaryStatusBadge');
+    if (!badgeEl) return;
+    try {
+      const res = await fetch('/api/auth/cloudinary-status');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.connected) {
+          badgeEl.innerHTML = `<span class="badge bg-success bg-opacity-10 text-success border border-success border-opacity-25 px-2 py-1"><i class="bi bi-cloud-check-fill me-1"></i>Cloudinary CDN Connected (${data.cloud_name})</span>`;
+        } else if (data.configured) {
+          badgeEl.innerHTML = `<span class="badge bg-warning bg-opacity-10 text-warning border border-warning border-opacity-25 px-2 py-1" title="${data.message}"><i class="bi bi-exclamation-triangle-fill me-1"></i>Cloudinary Connection Error</span>`;
+        } else {
+          badgeEl.innerHTML = `<span class="badge bg-secondary bg-opacity-10 text-secondary border px-2 py-1" title="To enable Cloudinary CDN, set CLOUDINARY_URL or credentials in .env"><i class="bi bi-cloud-slash me-1"></i>Cloudinary: Not Configured (.env)</span>`;
+        }
+      }
+    } catch (e) {
+      console.warn('Could not check Cloudinary status:', e);
+    }
   }
 
   handleAvatarFileSelect(event) {
@@ -161,7 +245,7 @@ class App {
       const img = new Image();
       img.onload = () => {
         const canvas = document.createElement('canvas');
-        const maxDim = 150;
+        const maxDim = 600;
         let width = img.width;
         let height = img.height;
         if (width > height) {
@@ -174,22 +258,46 @@ class App {
         const ctx = canvas.getContext('2d');
         ctx.drawImage(img, 0, 0, width, height);
         
-        const compressedBase64 = canvas.toDataURL('image/jpeg', 0.85);
+        const compressedBase64 = canvas.toDataURL('image/jpeg', 0.90);
         this.pendingAvatarBase64 = compressedBase64;
 
         const previewImg = document.getElementById('profileModalAvatarPreview');
         const placeholder = document.getElementById('profileModalAvatarPlaceholder');
+        const removeBtn = document.getElementById('btnRemoveAvatarPhoto');
         previewImg.src = compressedBase64;
-        previewImg.style.display = 'inline-block';
-        placeholder.style.display = 'none';
+        previewImg.classList.remove('d-none');
+        placeholder.classList.add('d-none');
+        if (removeBtn) removeBtn.classList.remove('d-none');
       };
       img.src = e.target.result;
     };
     reader.readAsDataURL(file);
   }
 
+  removeAvatarPhoto() {
+    this.pendingAvatarBase64 = '__REMOVE__';
+    const previewImg = document.getElementById('profileModalAvatarPreview');
+    const placeholder = document.getElementById('profileModalAvatarPlaceholder');
+    const removeBtn = document.getElementById('btnRemoveAvatarPhoto');
+    if (previewImg) {
+      previewImg.src = '';
+      previewImg.classList.add('d-none');
+    }
+    if (placeholder) {
+      placeholder.classList.remove('d-none');
+    }
+    if (removeBtn) {
+      removeBtn.classList.add('d-none');
+    }
+    const fileInput = document.getElementById('avatarFileInput');
+    if (fileInput) fileInput.value = '';
+  }
+
   async handleProfileUpdate(event) {
     event.preventDefault();
+    const saveBtn = document.getElementById('btnSaveProfile');
+    const originalText = saveBtn ? saveBtn.innerHTML : 'Save Profile';
+
     const payload = {
       full_name: document.getElementById('profFullName').value.trim(),
       phone: document.getElementById('profPhone').value.trim() || null,
@@ -200,7 +308,16 @@ class App {
     };
 
     if (this.pendingAvatarBase64) {
-      payload.avatar_url = this.pendingAvatarBase64;
+      payload.avatar_url = this.pendingAvatarBase64 === '__REMOVE__' ? '' : this.pendingAvatarBase64;
+      if (saveBtn) {
+        saveBtn.disabled = true;
+        saveBtn.innerHTML = this.pendingAvatarBase64 === '__REMOVE__'
+          ? '<span class="spinner-border spinner-border-sm me-2"></span>Removing Avatar...'
+          : '<span class="spinner-border spinner-border-sm me-2"></span>Uploading to Cloudinary CDN...';
+      }
+    } else if (saveBtn) {
+      saveBtn.disabled = true;
+      saveBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Saving...';
     }
 
     try {
@@ -213,13 +330,51 @@ class App {
       if (res.ok) {
         this.currentUser = await res.json();
         this.renderUserData();
+        if (this.mapHelper && typeof this.mapHelper.updateMyMarker === 'function') {
+          this.mapHelper.updateMyMarker();
+        }
         bootstrap.Modal.getInstance(document.getElementById('profileModal')).hide();
         alert('Profile & Photo updated successfully! 🎉');
       } else {
-        alert('Failed to update profile.');
+        const err = await res.json().catch(() => ({}));
+        alert('Failed to update profile: ' + (err.detail || 'Unknown error'));
       }
     } catch (e) {
       alert('Error updating profile: ' + e.message);
+    } finally {
+      if (saveBtn) {
+        saveBtn.disabled = false;
+        saveBtn.innerHTML = originalText;
+      }
+    }
+  }
+
+  async handleGoogleLogin() {
+    try {
+      const fbData = await firebaseAuth.signInWithGoogle();
+      const res = await fetch('/api/auth/firebase-login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id_token: fbData.idToken,
+          email: fbData.email,
+          full_name: fbData.fullName,
+          avatar_url: fbData.avatarUrl,
+          email_verified: fbData.emailVerified
+        })
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        this.token = data.access_token;
+        localStorage.setItem('token', this.token);
+        await this.loadCurrentUser();
+      } else {
+        const err = await res.json().catch(() => ({ detail: 'Authentication failed' }));
+        alert('Google Sign-in failed: ' + (err.detail || 'Could not verify token.'));
+      }
+    } catch (err) {
+      alert('Google Sign-In: ' + err.message);
     }
   }
 
@@ -227,6 +382,38 @@ class App {
     event.preventDefault();
     const u = document.getElementById('loginUsername').value.trim();
     const p = document.getElementById('loginPassword').value;
+
+    // If it's an email and Firebase is configured, verify original email
+    if (u.includes('@') && firebaseAuth.isConfigured()) {
+      try {
+        const fbData = await firebaseAuth.signInWithVerifiedEmail(u, p);
+        const res = await fetch('/api/auth/firebase-login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            id_token: fbData.idToken,
+            email: fbData.email,
+            full_name: fbData.fullName,
+            avatar_url: fbData.avatarUrl,
+            email_verified: fbData.emailVerified
+          })
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          this.token = data.access_token;
+          localStorage.setItem('token', this.token);
+          await this.loadCurrentUser();
+          return;
+        }
+      } catch (err) {
+        if (err.message && err.message.includes('NOT verified')) {
+          alert(err.message);
+          return;
+        }
+        // Fallback to local authentication
+      }
+    }
 
     try {
       const res = await fetch('/api/auth/login', {
@@ -251,31 +438,48 @@ class App {
 
   async handleSignup(event) {
     event.preventDefault();
-    const payload = {
-      full_name: document.getElementById('regFullName').value.trim(),
-      username: document.getElementById('regUsername').value.trim(),
-      email: document.getElementById('regEmail').value.trim(),
-      password: document.getElementById('regPassword').value
-    };
+    const fullName = document.getElementById('regFullName').value.trim();
+    const email = document.getElementById('regEmail').value.trim();
+    const password = document.getElementById('regPassword').value;
 
-    try {
-      const res = await fetch('/api/auth/signup', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        this.token = data.access_token;
-        localStorage.setItem('token', this.token);
-        await this.loadCurrentUser();
-      } else {
-        const err = await res.json().catch(() => ({ detail: 'Signup failed' }));
-        alert('Signup Failed: ' + (err.detail || 'Check inputs.'));
+    if (firebaseAuth.isConfigured()) {
+      try {
+        const result = await firebaseAuth.signUpWithVerifiedEmail(email, password, fullName);
+        alert('🎉 ' + result.message);
+        this.showLoginForm();
+        document.getElementById('loginUsername').value = email;
+      } catch (err) {
+        alert('Signup Error: ' + err.message);
       }
-    } catch (err) {
-      alert('Signup connection error: ' + err.message);
+    } else {
+      // Direct registration with original email format validation
+      const baseUsername = email.split('@')[0].replace(/[^a-zA-Z0-9_]/g, '').slice(0, 30) || ('user_' + Math.floor(Math.random() * 1000));
+      const payload = {
+        full_name: fullName,
+        username: baseUsername,
+        email: email,
+        password: password
+      };
+
+      try {
+        const res = await fetch('/api/auth/signup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        if (res.ok) {
+          const data = await res.json();
+          this.token = data.access_token;
+          localStorage.setItem('token', this.token);
+          await this.loadCurrentUser();
+        } else {
+          const err = await res.json().catch(() => ({ detail: 'Signup failed' }));
+          alert('Signup Failed: ' + (err.detail || 'Check inputs. Original email required.'));
+        }
+      } catch (err) {
+        alert('Signup connection error: ' + err.message);
+      }
     }
   }
 
@@ -284,8 +488,11 @@ class App {
     this.token = null;
     this.currentUser = null;
     if (this.feedPollingInterval) clearInterval(this.feedPollingInterval);
-    locationTracker.stopTracking();
-    this.showAuthScreen();
+    if (window.locationTracker) locationTracker.stopTracking();
+    if (window.firebaseAuth && firebaseAuth.auth) {
+      firebaseAuth.auth.signOut().catch(() => {});
+    }
+    window.location.href = '/login';
   }
 
   async handleSharingSwitch(isSharing) {
@@ -310,6 +517,12 @@ class App {
       const feed = await res.json();
       mapManager.updateFamilyMarkers(feed);
 
+      const activeBadge = document.getElementById('sheetActiveCountBadge');
+      if (activeBadge) {
+        const liveCount = feed.filter(f => f.is_sharing || f.is_sos).length;
+        activeBadge.innerText = `${liveCount} Live`;
+      }
+
       const list = document.getElementById('familyList');
       if (!list) return;
       if (feed.length === 0) {
@@ -317,24 +530,63 @@ class App {
         return;
       }
 
-      list.innerHTML = feed.map(item => `
-        <div class="member-card" onclick="mapManager.focusLocation(${item.location?.latitude || 0}, ${item.location?.longitude || 0})">
-          <div class="d-flex align-items-center gap-3">
-            <div class="member-avatar-box">
-              ${item.full_name[0].toUpperCase()}
-              ${item.location?.battery_level ? `<div class="member-battery-badge">${item.location.battery_level}%</div>` : ''}
-            </div>
-            <div>
-              <div class="fw-bold small">${item.full_name}</div>
-              <div class="text-muted" style="font-size: 11px;">
-                ${item.is_sos ? '<b class="text-danger">🚨 SOS ALERT</b>' : (item.is_sharing ? '📍 Sharing Live' : 'Offline')}
-                ${item.distance_km !== null ? ` • ${item.distance_km} km` : ''}
+      list.innerHTML = feed.map(item => {
+        const hasLoc = Boolean(item.location && item.location.latitude);
+        const avatarContent = item.avatar_url
+          ? `<img src="${item.avatar_url}" alt="${item.full_name}">`
+          : item.full_name[0].toUpperCase();
+
+        const batteryVal = item.location?.battery_level;
+        let batteryColor = '#10b981';
+        if (batteryVal !== null && batteryVal !== undefined) {
+          if (batteryVal < 20) batteryColor = '#ef4444';
+          else if (batteryVal < 45) batteryColor = '#f59e0b';
+        }
+
+        const batteryBadge = (batteryVal !== null && batteryVal !== undefined)
+          ? `<div class="member-battery-badge" style="color: ${batteryColor};"><i class="bi bi-lightning-fill"></i>${batteryVal}%</div>`
+          : '';
+
+        const clickHandler = hasLoc
+          ? `mapManager.focusLocation(${item.location.latitude}, ${item.location.longitude})`
+          : `alert('${item.full_name.replace(/'/g, "\\'")} is currently offline or location sharing is inactive.')`;
+
+        const isSos = Boolean(item.is_sos);
+
+        return `
+          <div class="member-card ${isSos ? 'sos-active' : ''}" onclick="${clickHandler}">
+            <div class="d-flex align-items-center gap-2 gap-sm-3 min-w-0">
+              <div class="member-avatar-box">
+                ${avatarContent}
+                ${batteryBadge}
+              </div>
+              <div class="overflow-hidden">
+                <div class="member-name-text">${item.full_name}</div>
+                <div class="member-sub-text d-flex align-items-center gap-1 mt-0.5">
+                  ${isSos
+                    ? '<span class="text-danger fw-bold"><i class="bi bi-exclamation-triangle-fill me-1"></i>SOS ALERT</span>'
+                    : (item.is_sharing
+                      ? '<span class="text-success fw-semibold"><span class="status-pulse-dot"></span>Live</span>'
+                      : '<span class="text-muted"><i class="bi bi-cloud-slash me-1"></i>Offline</span>')
+                  }
+                  ${item.distance_km !== null ? `<span class="badge bg-secondary bg-opacity-20 text-body-secondary ms-1 py-0.5 px-1.5" style="font-size: 10.5px;">${item.distance_km} km</span>` : ''}
+                </div>
               </div>
             </div>
+            <div class="flex-shrink-0 ms-2 d-flex align-items-center gap-1.5">
+              <button class="btn btn-sm btn-outline-primary py-0.5 px-2 rounded-pill d-flex align-items-center gap-1" style="font-size: 11px;" title="View Route History" onclick="event.stopPropagation(); app.viewLocationHistory(${item.user_id}, '${item.full_name.replace(/'/g, "\\'")}')">
+                <i class="bi bi-clock-history"></i><span>Route</span>
+              </button>
+              ${isSos
+                ? '<span class="badge bg-danger rounded-pill px-2 py-1 small">SOS</span>'
+                : (item.is_sharing
+                  ? '<i class="bi bi-broadcast text-success fs-5"></i>'
+                  : '<i class="bi bi-eye-slash text-muted fs-5"></i>')
+              }
+            </div>
           </div>
-          <div>${item.is_sharing ? '<i class="bi bi-broadcast text-success"></i>' : '<i class="bi bi-eye-slash text-muted"></i>'}</div>
-        </div>
-      `).join('');
+        `;
+      }).join('');
     } catch (e) {}
   }
 
@@ -353,13 +605,92 @@ class App {
       list.innerHTML = groups.map(g => `
         <div class="member-card d-block">
           <div class="d-flex justify-content-between align-items-center mb-1">
-            <b>${g.name}</b>
-            <span class="badge bg-secondary">${g.member_count} members</span>
+            <span class="fw-bold" style="font-size: 14.5px;">${g.name}</span>
+            <span class="badge bg-primary bg-opacity-15 text-primary border border-primary border-opacity-25 rounded-pill" style="font-size: 11px;">${g.member_count} members</span>
           </div>
-          <div class="small text-muted">Invite Code: <code class="text-primary fw-bold">${g.invite_code}</code></div>
+          <div class="d-flex align-items-center justify-content-between mt-2 pt-1 border-top border-secondary border-opacity-20">
+            <div class="small text-muted" style="font-size: 11.5px;">Invite Code: <code class="text-primary fw-bold" style="font-size: 13px;">${g.invite_code}</code></div>
+            <button class="btn btn-sm btn-outline-secondary py-0 px-2 rounded-3" style="font-size: 11px;" onclick="event.stopPropagation(); app.copyInviteCode('${g.invite_code}', this)">
+              <i class="bi bi-clipboard me-1"></i>Copy
+            </button>
+          </div>
         </div>
       `).join('');
     } catch (e) {}
+  }
+
+  copyInviteCode(code, btn) {
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(code).then(() => {
+        const orig = btn.innerHTML;
+        btn.innerHTML = `<i class="bi bi-check2 text-success me-1"></i>Copied!`;
+        setTimeout(() => { btn.innerHTML = orig; }, 1800);
+      }).catch(() => {
+        prompt('Copy circle invite code:', code);
+      });
+    } else {
+      prompt('Copy circle invite code:', code);
+    }
+  }
+
+  async viewLocationHistory(userId, userName, hours = 24) {
+    if (!this.token) return;
+    this.currentHistoryUserId = userId;
+    this.currentHistoryUserName = userName;
+    this.currentHistoryHours = hours;
+
+    try {
+      const res = await this.authFetch(`/api/locations/history/${userId}?hours=${hours}`);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: 'Failed to fetch history' }));
+        alert('Route History: ' + (err.detail || 'Could not fetch history'));
+        return;
+      }
+
+      const points = await res.json();
+      if (!points || points.length === 0) {
+        alert(`No location history found for ${userName} in the past ${hours} hours.`);
+        return;
+      }
+
+      mapManager.drawRouteHistory(points, userName);
+
+      // Show banner
+      const banner = document.getElementById('routeHistoryBanner');
+      const title = document.getElementById('routeBannerTitle');
+      const sub = document.getElementById('routeBannerSubtitle');
+      if (banner) {
+        if (title) title.innerText = `Route: ${userName}`;
+        if (sub) sub.innerText = `Past ${hours}h • ${points.length} points recorded`;
+        banner.classList.remove('d-none');
+      }
+
+      // If mobile, collapse sidebar to give full view of route on map
+      const sidebar = document.getElementById('mainSidebar');
+      const chevron = document.getElementById('sheetChevronIcon');
+      if (sidebar && window.innerWidth <= 768) {
+        sidebar.classList.add('collapsed');
+        document.body.classList.remove('sheet-expanded');
+        document.body.classList.add('sheet-collapsed');
+        if (chevron) chevron.className = 'bi bi-chevron-up text-muted ms-1 fs-6';
+      }
+    } catch (e) {
+      alert('Error fetching route history: ' + e.message);
+    }
+  }
+
+  reloadRouteHistory(hours) {
+    if (this.currentHistoryUserId) {
+      this.viewLocationHistory(this.currentHistoryUserId, this.currentHistoryUserName, hours);
+    }
+  }
+
+  clearRouteHistory() {
+    mapManager.clearRouteHistory();
+    const banner = document.getElementById('routeHistoryBanner');
+    if (banner) banner.classList.add('d-none');
+    this.currentHistoryUserId = null;
+    this.currentHistoryUserName = null;
   }
 
   async loadRequests() {
@@ -368,6 +699,17 @@ class App {
       const res = await this.authFetch('/api/friends/requests');
       if (!res.ok) return;
       const reqs = await res.json();
+
+      const badge = document.getElementById('pendingRequestsCountBadge');
+      if (badge) {
+        if (reqs.length > 0) {
+          badge.innerText = reqs.length;
+          badge.classList.remove('d-none');
+        } else {
+          badge.classList.add('d-none');
+        }
+      }
+
       const list = document.getElementById('requestsList');
       if (!list) return;
       if (reqs.length === 0) {
@@ -376,81 +718,79 @@ class App {
       }
       list.innerHTML = reqs.map(r => `
         <div class="member-card">
-          <div>
-            <b>${r.sender.full_name}</b>
-            <div class="small text-muted">@${r.sender.username}</div>
+          <div class="min-w-0">
+            <div class="fw-bold" style="font-size: 14px;">${r.sender.full_name}</div>
+            <div class="text-muted" style="font-size: 11.5px;">@${r.sender.username}</div>
           </div>
           <div class="btn-group btn-group-sm">
-            <button class="btn btn-success py-0 px-2" onclick="app.respondRequest(${r.id}, 'accept')"><i class="bi bi-check-lg"></i></button>
-            <button class="btn btn-danger py-0 px-2" onclick="app.respondRequest(${r.id}, 'reject')"><i class="bi bi-x-lg"></i></button>
+            <button class="btn btn-success py-1 px-3 rounded-start-3" title="Accept" onclick="app.respondRequest(${r.id}, 'accept')"><i class="bi bi-check-lg"></i></button>
+            <button class="btn btn-danger py-1 px-3 rounded-end-3" title="Decline" onclick="app.respondRequest(${r.id}, 'reject')"><i class="bi bi-x-lg"></i></button>
           </div>
         </div>
       `).join('');
     } catch (e) {}
   }
 
-  async respondRequest(reqId, action) {
-    const res = await this.authFetch(`/api/friends/requests/${reqId}/respond?action=${action}`, { method: 'POST' });
-    if (res.ok) {
-      this.loadRequests();
-      this.loadFamilyFeed();
+  toggleMobileSidebar() {
+    const sidebar = document.getElementById('mainSidebar');
+    const chevron = document.getElementById('sheetChevronIcon');
+    if (sidebar) {
+      const willExpand = sidebar.classList.contains('collapsed');
+      if (willExpand) {
+        sidebar.classList.remove('collapsed');
+        document.body.classList.add('sheet-expanded');
+        document.body.classList.remove('sheet-collapsed');
+        if (chevron) chevron.className = 'bi bi-chevron-down text-muted ms-1 fs-6';
+      } else {
+        sidebar.classList.add('collapsed');
+        document.body.classList.remove('sheet-expanded');
+        document.body.classList.add('sheet-collapsed');
+        if (chevron) chevron.className = 'bi bi-chevron-up text-muted ms-1 fs-6';
+      }
+      setTimeout(() => {
+        if (window.mapManager && mapManager.map && mapManager.map.invalidateSize) {
+          mapManager.map.invalidateSize();
+        }
+      }, 350);
     }
   }
 
-  async handleSendFriendRequest(event) {
-    event.preventDefault();
-    const identifier = document.getElementById('targetFriendIdentifier').value;
-    const res = await this.authFetch('/api/friends/request', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username_or_email: identifier })
-    });
-    if (res.ok) {
-      bootstrap.Modal.getInstance(document.getElementById('addFriendModal')).hide();
-      alert('Request sent successfully!');
-    } else {
-      const err = await res.json();
-      alert('Error: ' + err.detail);
-    }
-  }
+  initMobileGestures() {
+    const zone = document.getElementById('sidebarDragZone') || document.getElementById('sidebarDragHandle');
+    if (!zone) return;
+    let startY = 0;
 
-  async handleCreateGroup(event) {
-    event.preventDefault();
-    const name = document.getElementById('groupNameInput').value;
-    const res = await this.authFetch('/api/groups/create', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name })
-    });
-    if (res.ok) {
-      bootstrap.Modal.getInstance(document.getElementById('createGroupModal')).hide();
-      this.loadGroups();
-    }
-  }
+    zone.addEventListener('touchstart', (e) => {
+      startY = e.touches[0].clientY;
+    }, { passive: true });
 
-  async handleJoinGroup(event) {
-    event.preventDefault();
-    const code = document.getElementById('joinGroupCodeInput').value;
-    const res = await this.authFetch('/api/groups/join', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ invite_code: code })
-    });
-    if (res.ok) {
-      bootstrap.Modal.getInstance(document.getElementById('joinGroupModal')).hide();
-      this.loadGroups();
-      this.loadFamilyFeed();
-    } else {
-      const err = await res.json();
-      alert('Error: ' + err.detail);
-    }
-  }
+    zone.addEventListener('touchend', (e) => {
+      const endY = e.changedTouches[0].clientY;
+      const diff = endY - startY;
+      const sidebar = document.getElementById('mainSidebar');
+      const chevron = document.getElementById('sheetChevronIcon');
+      if (!sidebar) return;
 
-  startFeedPolling() {
-    if (this.feedPollingInterval) clearInterval(this.feedPollingInterval);
-    this.feedPollingInterval = setInterval(() => {
-      if (navigator.onLine) this.loadFamilyFeed();
-    }, 7000);
+      if (diff > 30) {
+        // Swiped down -> collapse bottom sheet
+        sidebar.classList.add('collapsed');
+        document.body.classList.remove('sheet-expanded');
+        document.body.classList.add('sheet-collapsed');
+        if (chevron) chevron.className = 'bi bi-chevron-up text-muted ms-1 fs-6';
+      } else if (diff < -30) {
+        // Swiped up -> expand bottom sheet
+        sidebar.classList.remove('collapsed');
+        document.body.classList.add('sheet-expanded');
+        document.body.classList.remove('sheet-collapsed');
+        if (chevron) chevron.className = 'bi bi-chevron-down text-muted ms-1 fs-6';
+      }
+
+      setTimeout(() => {
+        if (window.mapManager && mapManager.map && mapManager.map.invalidateSize) {
+          mapManager.map.invalidateSize();
+        }
+      }, 350);
+    }, { passive: true });
   }
 
   toggleTheme() {

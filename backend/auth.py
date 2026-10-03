@@ -1,6 +1,7 @@
 import os
 from datetime import datetime, timedelta
 from typing import Optional
+from dotenv import load_dotenv
 import bcrypt
 from jose import JWTError, jwt
 from fastapi import Depends, HTTPException, status
@@ -8,6 +9,8 @@ from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.orm import Session
 from backend.database import get_db
 from backend.models import User
+
+load_dotenv()
 
 SECRET_KEY = os.getenv("SECRET_KEY", "prod-family-locator-secret-key-replace-in-env-999")
 ALGORITHM = os.getenv("ALGORITHM", "HS256")
@@ -55,6 +58,8 @@ def get_current_user(
     if user is None or not user.is_active:
         raise credentials_exception
     
-    user.last_active = datetime.utcnow()
-    db.commit()
+    now = datetime.utcnow()
+    if not user.last_active or (now - user.last_active).total_seconds() > 120:
+        user.last_active = now
+        db.commit()
     return user

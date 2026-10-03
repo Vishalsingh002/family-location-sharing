@@ -49,6 +49,11 @@ def trigger_sos(
 def resolve_sos(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     current_user.is_sos_active = False
 
+    # Clear is_sos flag on recent locations to avoid stuck state
+    recent_sos = db.query(Location).filter(Location.user_id == current_user.id, Location.is_sos == True).all()
+    for l in recent_sos:
+        l.is_sos = False
+
     friend_ids = [f.friend_id for f in db.query(Friend).filter(Friend.user_id == current_user.id).all()]
     my_groups = [m.group_id for m in db.query(GroupMember).filter(GroupMember.user_id == current_user.id).all()]
     group_member_ids = [gm.user_id for gm in db.query(GroupMember).filter(GroupMember.group_id.in_(my_groups)).all()]

@@ -38,11 +38,25 @@ class LocationTracker {
   }
 
   startTracking() {
-    if (!navigator.geolocation) return;
+    if (!navigator.geolocation) {
+      const accEl = document.getElementById('gpsAccuracyLabel');
+      if (accEl) accEl.innerHTML = `<i class="bi bi-exclamation-triangle text-warning me-1"></i> HTTPS needed for GPS`;
+      return;
+    }
 
     this.watchId = navigator.geolocation.watchPosition(
       pos => this.handleSuccess(pos),
-      err => console.warn('GPS:', err.message),
+      err => {
+        console.warn('GPS:', err.message);
+        const accEl = document.getElementById('gpsAccuracyLabel');
+        if (accEl) {
+          if (err.code === 1) {
+            accEl.innerHTML = `<i class="bi bi-geo-slash text-danger me-1"></i> GPS Blocked`;
+          } else {
+            accEl.innerHTML = `<i class="bi bi-clock-history text-muted me-1"></i> Finding GPS...`;
+          }
+        }
+      },
       { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 }
     );
   }
@@ -60,7 +74,7 @@ class LocationTracker {
 
     mapManager.updateMyPosition(latitude, longitude, accuracy);
 
-    // 🟢 Clean Badge (Ab ±95m nahi dikhega, sirf clean Live GPS aayega)
+    // Clean Badge
     const accEl = document.getElementById('gpsAccuracyLabel');
     if (accEl) accEl.innerHTML = `<i class="bi bi-broadcast text-success me-1"></i> Live GPS`;
 
@@ -93,6 +107,10 @@ class LocationTracker {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
+      // Also sync live location to Firebase Firestore
+      if (window.firebaseAuth && typeof window.firebaseAuth.saveLocationToFirestore === 'function') {
+        window.firebaseAuth.saveLocationToFirestore(payload, app.currentUser);
+      }
     } catch (e) {}
   }
 
@@ -111,14 +129,40 @@ class LocationTracker {
     } catch (e) {}
   }
 
-  // 1-CLICK INSTANT SOS (No Popup, No Alert)
+  // 1-CLICK INSTANT SOS WITH POSITION FALLBACK
   async triggerSOSNow() {
-    if (!this.currentPosition) return;
-
     if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
 
-    // Update UI instantly
-    app.currentUser.is_sos_active = true;
+    if (!this.currentPosition) {
+      const accEl = document.getElementById('gpsAccuracyLabel');
+      if (accEl) accEl.innerHTML = `<i class="bi bi-broadcast text-danger animate-pulse me-1"></i> Locking SOS GPS...`;
+
+      if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+          pos => {
+            this.handleSuccess(pos);
+            this.dispatchSOS();
+          },
+          err => {
+            alert('Emergency SOS Alert: Unable to access GPS. Please allow Location permissions in your browser settings.');
+          },
+          { enableHighAccuracy: true, timeout: 8000 }
+        );
+      } else {
+        alert('Geolocation is not supported or requires HTTPS on this mobile device.');
+      }
+      return;
+    }
+
+    this.dispatchSOS();
+  }
+
+  async dispatchSOS() {
+    if (!this.currentPosition) return;
+
+    if (app.currentUser) {
+      app.currentUser.is_sos_active = true;
+    }
     app.updateSosUI();
     mapManager.updateMyPosition(this.currentPosition.latitude, this.currentPosition.longitude);
 
@@ -132,6 +176,15 @@ class LocationTracker {
           message: 'Distress alert!'
         })
       });
+
+      // Also sync emergency SOS alert to Firebase Firestore
+      if (window.firebaseAuth && typeof window.firebaseAuth.saveSOSToFirestore === 'function') {
+        window.firebaseAuth.saveSOSToFirestore({
+          latitude: this.currentPosition.latitude,
+          longitude: this.currentPosition.longitude,
+          battery_level: this.batteryLevel
+        }, app.currentUser);
+      }
     } catch (e) {
       console.error('SOS trigger err:', e);
     }
@@ -139,8 +192,9 @@ class LocationTracker {
 
   // 1-CLICK INSTANT RESOLVE (No Popup, No Alert)
   async resolveSOS() {
-    // Return to normal instantly
-    app.currentUser.is_sos_active = false;
+    if (app.currentUser) {
+      app.currentUser.is_sos_active = false;
+    }
     app.updateSosUI();
     if (this.currentPosition) {
       mapManager.updateMyPosition(this.currentPosition.latitude, this.currentPosition.longitude);

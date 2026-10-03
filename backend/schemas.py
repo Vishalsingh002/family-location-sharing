@@ -44,6 +44,17 @@ class Token(BaseModel):
     token_type: str
     user: UserOut
 
+class PasswordChange(BaseModel):
+    current_password: str
+    new_password: str = Field(..., min_length=6)
+
+class FirebaseAuthRequest(BaseModel):
+    id_token: str
+    email: str
+    full_name: Optional[str] = None
+    avatar_url: Optional[str] = None
+    email_verified: Optional[bool] = False
+
 class ProfileUpdate(BaseModel):
     full_name: Optional[str] = None
     phone: Optional[str] = None
