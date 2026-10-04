@@ -16,12 +16,24 @@ class App {
   async init() {
     this.applyTheme(localStorage.getItem('theme') || 'dark');
     this.initMobileGestures();
+    this.initTabListeners();
 
     if (this.token) {
       await this.loadCurrentUser();
     } else {
       this.showAuthScreen();
     }
+  }
+
+  initTabListeners() {
+    document.querySelectorAll('button[data-bs-toggle="tab"]').forEach(tabBtn => {
+      tabBtn.addEventListener('shown.bs.tab', (e) => {
+        const target = e.target.getAttribute('data-bs-target');
+        if (target === '#tabGroups') this.loadGroups();
+        else if (target === '#tabRequests') this.loadRequests();
+        else if (target === '#tabFamily') this.loadFamilyFeed();
+      });
+    });
   }
 
   showAuthScreen() {
@@ -82,11 +94,12 @@ class App {
   startFeedPolling() {
     if (this.feedPollingInterval) clearInterval(this.feedPollingInterval);
     this.feedPollingInterval = setInterval(() => {
-      if (this.token) {
+      if (this.token && !document.hidden) {
         this.loadFamilyFeed();
         this.loadNotifications();
+        this.loadRequests();
       }
-    }, 6000);
+    }, 8000);
   }
 
   async loadNotifications() {
@@ -97,6 +110,10 @@ class App {
       const notifs = await res.json();
       const notifList = document.getElementById('notificationList');
       if (notifList) {
+        const hash = JSON.stringify(notifs);
+        if (this._lastNotifHash === hash) return;
+        this._lastNotifHash = hash;
+
         if (!notifs || notifs.length === 0) {
           notifList.innerHTML = '<div class="text-muted small text-center py-2">No new notifications</div>';
         } else {
@@ -169,8 +186,8 @@ class App {
     const masterSwitch = document.getElementById('masterSharingSwitch');
     if (masterSwitch) masterSwitch.checked = Boolean(this.currentUser.is_sharing);
 
-    // Sync user profile to Firebase Firestore Cloud
-    if (window.firebaseAuth && typeof window.firebaseAuth.saveUserToFirestore === 'function') {
+    // Sync user profile to Firebase Firestore Cloud only if authenticated
+    if (window.firebaseAuth && firebaseAuth.isConfigured() && firebaseAuth.auth && firebaseAuth.auth.currentUser) {
       window.firebaseAuth.saveUserToFirestore(this.currentUser);
     }
   }
@@ -525,6 +542,11 @@ class App {
 
       const list = document.getElementById('familyList');
       if (!list) return;
+
+      const feedHash = JSON.stringify(feed);
+      if (this._lastFeedHash === feedHash) return;
+      this._lastFeedHash = feedHash;
+
       if (feed.length === 0) {
         list.innerHTML = `<div class="text-center text-muted small py-3">No family members connected yet.</div>`;
         return;
@@ -577,6 +599,9 @@ class App {
               <button class="btn btn-sm btn-outline-primary py-0.5 px-2 rounded-pill d-flex align-items-center gap-1" style="font-size: 11px;" title="View Route History" onclick="event.stopPropagation(); app.viewLocationHistory(${item.user_id}, '${item.full_name.replace(/'/g, "\\'")}')">
                 <i class="bi bi-clock-history"></i><span>Route</span>
               </button>
+              <button class="btn btn-sm btn-outline-danger py-0.5 px-2 rounded-pill d-flex align-items-center gap-1" style="font-size: 11px;" title="Remove Member" onclick="event.stopPropagation(); app.removeFriend(${item.user_id}, '${item.full_name.replace(/'/g, "\\'")}')">
+                <i class="bi bi-person-x"></i><span>Remove</span>
+              </button>
               ${isSos
                 ? '<span class="badge bg-danger rounded-pill px-2 py-1 small">SOS</span>'
                 : (item.is_sharing
@@ -599,31 +624,100 @@ class App {
       const list = document.getElementById('groupsList');
       if (!list) return;
       if (groups.length === 0) {
-        list.innerHTML = `<div class="text-center text-muted small py-3">No circles joined yet.</div>`;
+        list.innerHTML = `
+          <div class="text-center text-muted small py-4">
+            <i class="bi bi-diagram-3 fs-3 d-block mb-2 opacity-50"></i>
+            <div>No family circles joined yet.</div>
+            <div class="mt-1" style="font-size: 11.5px;">Click <strong>Create</strong> or <strong>Join</strong> above to get started!</div>
+          </div>
+        `;
         return;
       }
       list.innerHTML = groups.map(g => `
         <div class="member-card d-block">
           <div class="d-flex justify-content-between align-items-center mb-1">
-            <span class="fw-bold" style="font-size: 14.5px;">${g.name}</span>
-            <span class="badge bg-primary bg-opacity-15 text-primary border border-primary border-opacity-25 rounded-pill" style="font-size: 11px;">${g.member_count} members</span>
+            <span class="fw-bold text-main" style="font-size: 14.5px;"><i class="bi bi-diagram-3 me-1 text-primary"></i>${g.name}</span>
+            <span class="badge bg-primary bg-opacity-15 text-primary border border-primary border-opacity-25 rounded-pill" style="font-size: 11px;">${g.member_count} ${g.member_count === 1 ? 'member' : 'members'}</span>
           </div>
           <div class="d-flex align-items-center justify-content-between mt-2 pt-1 border-top border-secondary border-opacity-20">
-            <div class="small text-muted" style="font-size: 11.5px;">Invite Code: <code class="text-primary fw-bold" style="font-size: 13px;">${g.invite_code}</code></div>
-            <button class="btn btn-sm btn-outline-secondary py-0 px-2 rounded-3" style="font-size: 11px;" onclick="event.stopPropagation(); app.copyInviteCode('${g.invite_code}', this)">
-              <i class="bi bi-clipboard me-1"></i>Copy
-            </button>
+            <div class="small text-muted" style="font-size: 11.5px;">Code: <code class="text-primary fw-bold" style="font-size: 13px; letter-spacing: 0.5px;">${g.invite_code}</code></div>
+            <div class="d-flex gap-1">
+              <button class="btn btn-sm btn-outline-secondary py-0 px-2 rounded-3" style="font-size: 11px;" onclick="event.stopPropagation(); app.copyInviteCode('${g.invite_code}', this)" title="Copy Invite Code">
+                <i class="bi bi-clipboard me-1"></i>Copy
+              </button>
+              ${g.role === 'admin'
+                ? `<button class="btn btn-sm btn-outline-danger py-0 px-2 rounded-3" style="font-size: 11px;" onclick="event.stopPropagation(); app.deleteGroup(${g.id}, '${g.name.replace(/'/g, "\\'")}')" title="Delete Circle">
+                    <i class="bi bi-trash me-1"></i>Delete
+                  </button>`
+                : `<button class="btn btn-sm btn-outline-danger py-0 px-2 rounded-3" style="font-size: 11px;" onclick="event.stopPropagation(); app.leaveGroup(${g.id}, '${g.name.replace(/'/g, "\\'")}')" title="Leave Circle">
+                    <i class="bi bi-box-arrow-right me-1"></i>Leave
+                  </button>`
+              }
+            </div>
           </div>
         </div>
       `).join('');
-    } catch (e) {}
+    } catch (e) {
+      console.warn('Load groups error:', e);
+    }
+  }
+
+  async leaveGroup(groupId, groupName) {
+    if (!confirm(`Are you sure you want to leave circle "${groupName}"?`)) return;
+    try {
+      const res = await this.authFetch(`/api/groups/${groupId}/leave`, { method: 'DELETE' });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        this.showToast(`You left circle "${groupName}".`, 'info');
+        await this.loadGroups();
+        await this.loadFamilyFeed();
+      } else {
+        this.showToast(data.detail || 'Could not leave circle', 'danger');
+      }
+    } catch (err) {
+      this.showToast('Network error: ' + err.message, 'danger');
+    }
+  }
+
+  async deleteGroup(groupId, groupName) {
+    if (!confirm(`Are you sure you want to completely DELETE circle "${groupName}"? All circle members will be removed.`)) return;
+    try {
+      const res = await this.authFetch(`/api/groups/${groupId}/delete`, { method: 'DELETE' });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        this.showToast(data.message || `Circle "${groupName}" deleted.`, 'info');
+        await this.loadGroups();
+        await this.loadFamilyFeed();
+      } else {
+        this.showToast(data.detail || 'Could not delete circle', 'danger');
+      }
+    } catch (err) {
+      this.showToast('Network error: ' + err.message, 'danger');
+    }
+  }
+
+  async removeFriend(friendUserId, friendName) {
+    if (!confirm(`Are you sure you want to remove ${friendName} from your family list?`)) return;
+    try {
+      const res = await this.authFetch(`/api/friends/${friendUserId}`, { method: 'DELETE' });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        this.showToast(data.message || `${friendName} removed from family list.`, 'info');
+        await this.loadFamilyFeed();
+      } else {
+        this.showToast(data.detail || 'Could not remove member.', 'danger');
+      }
+    } catch (err) {
+      this.showToast('Network error: ' + err.message, 'danger');
+    }
   }
 
   copyInviteCode(code, btn) {
-    if (navigator.clipboard) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(code).then(() => {
         const orig = btn.innerHTML;
         btn.innerHTML = `<i class="bi bi-check2 text-success me-1"></i>Copied!`;
+        this.showToast(`Invite code ${code} copied! Share it with family.`, 'success');
         setTimeout(() => { btn.innerHTML = orig; }, 1800);
       }).catch(() => {
         prompt('Copy circle invite code:', code);
@@ -712,6 +806,11 @@ class App {
 
       const list = document.getElementById('requestsList');
       if (!list) return;
+
+      const reqsHash = JSON.stringify(reqs);
+      if (this._lastReqsHash === reqsHash) return;
+      this._lastReqsHash = reqsHash;
+
       if (reqs.length === 0) {
         list.innerHTML = `<div class="text-center text-muted small py-3">No pending requests.</div>`;
         return;
@@ -806,13 +905,213 @@ class App {
     if (btn) btn.innerHTML = theme === 'dark' ? '<i class="bi bi-moon-stars"></i>' : '<i class="bi bi-sun"></i>';
   }
 
-  openAddFriendModal() { new bootstrap.Modal(document.getElementById('addFriendModal')).show(); }
-  openCreateGroupModal() { new bootstrap.Modal(document.getElementById('createGroupModal')).show(); }
-  openJoinGroupModal() { new bootstrap.Modal(document.getElementById('joinGroupModal')).show(); }
+  showToast(msg, type = 'info') {
+    const container = document.getElementById('toastContainer');
+    if (!container) {
+      alert(msg);
+      return;
+    }
+    const toast = document.createElement('div');
+    toast.className = `app-toast toast-${type}`;
+    const iconClass = type === 'success'
+      ? 'bi-check-circle-fill text-success'
+      : (type === 'danger' ? 'bi-exclamation-triangle-fill text-danger' : 'bi-info-circle-fill text-primary');
+    toast.innerHTML = `<i class="bi ${iconClass} fs-5"></i><span>${msg}</span>`;
+    container.appendChild(toast);
+    setTimeout(() => {
+      toast.style.opacity = '0';
+      toast.style.transform = 'translateY(15px)';
+      setTimeout(() => toast.remove(), 300);
+    }, 4000);
+  }
+
+  openAddFriendModal() {
+    const el = document.getElementById('addFriendModal');
+    if (el) {
+      const input = document.getElementById('targetFriendIdentifier');
+      if (input) input.value = '';
+      bootstrap.Modal.getOrCreateInstance(el).show();
+    }
+  }
+
+  openCreateGroupModal() {
+    const el = document.getElementById('createGroupModal');
+    if (el) {
+      const input = document.getElementById('groupNameInput');
+      if (input) input.value = '';
+      bootstrap.Modal.getOrCreateInstance(el).show();
+    }
+  }
+
+  openJoinGroupModal() {
+    const el = document.getElementById('joinGroupModal');
+    if (el) {
+      const input = document.getElementById('joinGroupCodeInput');
+      if (input) input.value = '';
+      bootstrap.Modal.getOrCreateInstance(el).show();
+    }
+  }
+
+  async handleSendFriendRequest(event) {
+    if (event) event.preventDefault();
+    const input = document.getElementById('targetFriendIdentifier');
+    const val = input ? input.value.trim() : '';
+    if (!val) {
+      this.showToast('Please enter a username or email.', 'danger');
+      return;
+    }
+
+    const btn = document.getElementById('btnSendFriendRequest') || (event && event.submitter);
+    const origHtml = btn ? btn.innerHTML : '';
+    if (btn) {
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Sending...';
+    }
+
+    try {
+      const res = await this.authFetch('/api/friends/request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username_or_email: val })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        this.showToast(data.message || 'Friend request sent successfully!', 'success');
+        if (input) input.value = '';
+        const modalEl = document.getElementById('addFriendModal');
+        if (modalEl) {
+          const inst = bootstrap.Modal.getInstance(modalEl);
+          if (inst) inst.hide();
+        }
+        await this.loadFamilyFeed();
+        await this.loadRequests();
+      } else {
+        this.showToast(data.detail || 'Could not send friend request.', 'danger');
+      }
+    } catch (err) {
+      this.showToast('Network error: ' + err.message, 'danger');
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = origHtml;
+      }
+    }
+  }
+
+  async handleCreateGroup(event) {
+    if (event) event.preventDefault();
+    const input = document.getElementById('groupNameInput');
+    const name = input ? input.value.trim() : '';
+    if (!name) {
+      this.showToast('Please enter a circle name.', 'danger');
+      return;
+    }
+
+    const btn = document.getElementById('btnCreateGroup') || (event && event.submitter);
+    const origHtml = btn ? btn.innerHTML : '';
+    if (btn) {
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Creating...';
+    }
+
+    try {
+      const res = await this.authFetch('/api/groups/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        this.showToast(`Circle "${data.name}" created! Invite code: ${data.invite_code}`, 'success');
+        if (input) input.value = '';
+        const modalEl = document.getElementById('createGroupModal');
+        if (modalEl) {
+          const inst = bootstrap.Modal.getInstance(modalEl);
+          if (inst) inst.hide();
+        }
+        await this.loadGroups();
+        await this.loadFamilyFeed();
+      } else {
+        this.showToast(data.detail || 'Failed to create circle.', 'danger');
+      }
+    } catch (err) {
+      this.showToast('Network error: ' + err.message, 'danger');
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = origHtml;
+      }
+    }
+  }
+
+  async handleJoinGroup(event) {
+    if (event) event.preventDefault();
+    const input = document.getElementById('joinGroupCodeInput');
+    const code = input ? input.value.trim().toUpperCase() : '';
+    if (!code) {
+      this.showToast('Please enter an invite code.', 'danger');
+      return;
+    }
+
+    const btn = document.getElementById('btnJoinGroup') || (event && event.submitter);
+    const origHtml = btn ? btn.innerHTML : '';
+    if (btn) {
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Joining...';
+    }
+
+    try {
+      const res = await this.authFetch('/api/groups/join', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ invite_code: code })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        this.showToast(data.message || 'Joined circle successfully!', 'success');
+        if (input) input.value = '';
+        const modalEl = document.getElementById('joinGroupModal');
+        if (modalEl) {
+          const inst = bootstrap.Modal.getInstance(modalEl);
+          if (inst) inst.hide();
+        }
+        await this.loadGroups();
+        await this.loadFamilyFeed();
+      } else {
+        this.showToast(data.detail || 'Failed to join circle.', 'danger');
+      }
+    } catch (err) {
+      this.showToast('Network error: ' + err.message, 'danger');
+    } finally {
+      if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = origHtml;
+      }
+    }
+  }
+
+  async respondRequest(reqId, action) {
+    try {
+      const res = await this.authFetch(`/api/friends/requests/${reqId}/respond?action=${action}`, {
+        method: 'POST'
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        this.showToast(data.message || `Request ${action}ed!`, 'success');
+        await this.loadRequests();
+        await this.loadFamilyFeed();
+      } else {
+        this.showToast(data.detail || 'Action failed.', 'danger');
+      }
+    } catch (err) {
+      this.showToast('Network error: ' + err.message, 'danger');
+    }
+  }
 }
 
 const app = new App();
 window.app = app;
+window.showToast = (msg, type) => app.showToast(msg, type);
 window.mapManager = mapManager;
 window.locationTracker = locationTracker;
 

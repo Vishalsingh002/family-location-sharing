@@ -72,13 +72,17 @@ class LocationTracker {
     const { latitude, longitude, accuracy, speed, heading } = position.coords;
     this.currentPosition = { latitude, longitude, accuracy, speed, heading };
 
-    mapManager.updateMyPosition(latitude, longitude, accuracy);
+    // Throttle Leaflet UI updates so it doesn't freeze the browser
+    const now = Date.now();
+    if (!this._lastMapUpdateAt || (now - this._lastMapUpdateAt >= 1000)) {
+      this._lastMapUpdateAt = now;
+      mapManager.updateMyPosition(latitude, longitude, accuracy);
+    }
 
     // Clean Badge
     const accEl = document.getElementById('gpsAccuracyLabel');
     if (accEl) accEl.innerHTML = `<i class="bi bi-broadcast text-success me-1"></i> Live GPS`;
 
-    const now = Date.now();
     if (app.token && (now - this.lastSentAt > 8000)) {
       this.lastSentAt = now;
       const payload = {
@@ -107,8 +111,8 @@ class LocationTracker {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
-      // Also sync live location to Firebase Firestore
-      if (window.firebaseAuth && typeof window.firebaseAuth.saveLocationToFirestore === 'function') {
+      // Only sync live location to Firebase Firestore if Firebase Auth is actually signed in
+      if (window.firebaseAuth && firebaseAuth.isConfigured() && firebaseAuth.auth && firebaseAuth.auth.currentUser) {
         window.firebaseAuth.saveLocationToFirestore(payload, app.currentUser);
       }
     } catch (e) {}

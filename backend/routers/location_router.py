@@ -83,7 +83,7 @@ def get_live_family_locations(
 ):
     friend_ids = [f.friend_id for f in db.query(Friend).filter(Friend.user_id == current_user.id).all()]
     my_groups = [m.group_id for m in db.query(GroupMember).filter(GroupMember.user_id == current_user.id).all()]
-    group_member_ids = [gm.user_id for gm in db.query(GroupMember).filter(GroupMember.group_id.in_(my_groups)).all()]
+    group_member_ids = [gm.user_id for gm in db.query(GroupMember).filter(GroupMember.group_id.in_(my_groups)).all()] if my_groups else []
 
     all_ids = set(friend_ids + group_member_ids)
     all_ids.discard(current_user.id)

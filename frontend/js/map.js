@@ -31,10 +31,11 @@ class MapManager {
       attributionControl: false
     }).setView([28.6139, 77.2090], 15);
 
-    // Google Maps Clean HD Road Layer
-    L.tileLayer('https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}', {
-      maxZoom: 21,
-      subdomains: ['mt0', 'mt1', 'mt2', 'mt3']
+    // Blazing-fast Retina CDN Road Tiles (CartoDB Voyager)
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+      maxZoom: 20,
+      subdomains: 'abcd',
+      attribution: '&copy; OpenStreetMap, &copy; CARTO'
     }).addTo(this.map);
 
     this.map.invalidateSize();
@@ -112,13 +113,25 @@ class MapManager {
       }).addTo(this.map);
 
       this.map.setView(latlng, 16);
+      this._myState = { name, avatar, isSos, battery };
     } else {
+      // GPU accelerated transform - super fast, no DOM rebuild
       this.myMarker.setLatLng(latlng);
-      this.myMarker.setIcon(this.createAvatarIcon(name, avatar, true, isSos, battery));
-      this.myMarker.setPopupContent(myPopupHtml);
       this.myCircle.setLatLng(latlng);
-      this.myCircle.setStyle({ color: isSos ? '#f43f5e' : '#10b981', fillColor: isSos ? '#f43f5e' : '#10b981' });
       this.myCircle.setRadius(accuracy);
+
+      const stateChanged = !this._myState ||
+        this._myState.isSos !== isSos ||
+        this._myState.avatar !== avatar ||
+        this._myState.name !== name ||
+        Math.abs((this._myState.battery || 0) - (battery || 0)) >= 5;
+
+      if (stateChanged) {
+        this.myMarker.setIcon(this.createAvatarIcon(name, avatar, true, isSos, battery));
+        this.myMarker.setPopupContent(myPopupHtml);
+        this.myCircle.setStyle({ color: isSos ? '#f43f5e' : '#10b981', fillColor: isSos ? '#f43f5e' : '#10b981' });
+        this._myState = { name, avatar, isSos, battery };
+      }
     }
   }
 
@@ -158,11 +171,22 @@ class MapManager {
         const marker = L.marker(latlng, {
           icon: this.createAvatarIcon(name, avatarUrl, false, isSos, battery)
         }).addTo(this.map).bindPopup(popupHtml);
+        marker._state = { isSos, avatarUrl, battery, name };
         this.markers[uid] = marker;
       } else {
-        this.markers[uid].setLatLng(latlng);
-        this.markers[uid].setIcon(this.createAvatarIcon(name, avatarUrl, false, isSos, battery));
-        this.markers[uid].setPopupContent(popupHtml);
+        const marker = this.markers[uid];
+        marker.setLatLng(latlng);
+        const changed = !marker._state ||
+          marker._state.isSos !== isSos ||
+          marker._state.avatarUrl !== avatarUrl ||
+          marker._state.name !== name ||
+          Math.abs((marker._state.battery || 0) - (battery || 0)) >= 5;
+
+        if (changed) {
+          marker.setIcon(this.createAvatarIcon(name, avatarUrl, false, isSos, battery));
+          marker.setPopupContent(popupHtml);
+          marker._state = { isSos, avatarUrl, battery, name };
+        }
       }
     });
 
