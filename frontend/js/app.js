@@ -575,39 +575,54 @@ class App {
 
         const isSos = Boolean(item.is_sos);
 
+        let statusBadgeHtml = '';
+        if (isSos) {
+          statusBadgeHtml = `<span class="badge bg-danger text-white fw-bold px-2 py-0.5 d-inline-flex align-items-center gap-1 shadow-sm" style="font-size: 10.5px;"><i class="bi bi-exclamation-triangle-fill"></i>SOS ALERT</span>`;
+        } else if (item.is_sharing) {
+          statusBadgeHtml = `<span class="badge status-pill-live d-inline-flex align-items-center gap-1"><span class="status-pulse-dot"></span>Live</span>`;
+        } else {
+          statusBadgeHtml = `<span class="badge status-pill-offline d-inline-flex align-items-center gap-1"><i class="bi bi-cloud-slash"></i>Offline</span>`;
+        }
+
+        const distanceBadgeHtml = item.distance_km !== null
+          ? `<span class="badge distance-pill d-inline-flex align-items-center gap-1"><i class="bi bi-geo-alt-fill text-primary"></i>${item.distance_km} km</span>`
+          : '';
+
         return `
-          <div class="member-card ${isSos ? 'sos-active' : ''}" onclick="${clickHandler}">
-            <div class="d-flex align-items-center gap-2 gap-sm-3 min-w-0">
-              <div class="member-avatar-box">
-                ${avatarContent}
-                ${batteryBadge}
-              </div>
-              <div class="overflow-hidden">
-                <div class="member-name-text">${item.full_name}</div>
-                <div class="member-sub-text d-flex align-items-center gap-1 mt-0.5">
-                  ${isSos
-                    ? '<span class="text-danger fw-bold"><i class="bi bi-exclamation-triangle-fill me-1"></i>SOS ALERT</span>'
-                    : (item.is_sharing
-                      ? '<span class="text-success fw-semibold"><span class="status-pulse-dot"></span>Live</span>'
-                      : '<span class="text-muted"><i class="bi bi-cloud-slash me-1"></i>Offline</span>')
-                  }
-                  ${item.distance_km !== null ? `<span class="badge bg-secondary bg-opacity-20 text-body-secondary ms-1 py-0.5 px-1.5" style="font-size: 10.5px;">${item.distance_km} km</span>` : ''}
+          <div class="member-card d-block ${isSos ? 'sos-active' : ''}" onclick="${clickHandler}">
+            <!-- Top Row: Avatar + Name + Status Badges + Quick Locate Button -->
+            <div class="d-flex align-items-center justify-content-between">
+              <div class="d-flex align-items-center gap-2 gap-sm-3 min-w-0">
+                <div class="member-avatar-box">
+                  ${avatarContent}
+                  ${batteryBadge}
+                </div>
+                <div class="min-w-0">
+                  <div class="member-name-text text-truncate">${item.full_name}</div>
+                  <div class="d-flex align-items-center gap-1.5 flex-wrap mt-1">
+                    ${statusBadgeHtml}
+                    ${distanceBadgeHtml}
+                  </div>
                 </div>
               </div>
+              <div class="flex-shrink-0 ms-2">
+                <button class="btn btn-sm btn-action-focus" title="Locate on Map" onclick="${clickHandler}">
+                  <i class="bi bi-crosshair"></i>
+                </button>
+              </div>
             </div>
-            <div class="flex-shrink-0 ms-2 d-flex align-items-center gap-1.5">
-              <button class="btn btn-sm btn-outline-primary py-0.5 px-2 rounded-pill d-flex align-items-center gap-1" style="font-size: 11px;" title="View Route History" onclick="event.stopPropagation(); app.viewLocationHistory(${item.user_id}, '${item.full_name.replace(/'/g, "\\'")}')">
-                <i class="bi bi-clock-history"></i><span>Route</span>
-              </button>
-              <button class="btn btn-sm btn-outline-danger py-0.5 px-2 rounded-pill d-flex align-items-center gap-1" style="font-size: 11px;" title="Remove Member" onclick="event.stopPropagation(); app.removeFriend(${item.user_id}, '${item.full_name.replace(/'/g, "\\'")}')">
-                <i class="bi bi-person-x"></i><span>Remove</span>
-              </button>
-              ${isSos
-                ? '<span class="badge bg-danger rounded-pill px-2 py-1 small">SOS</span>'
-                : (item.is_sharing
-                  ? '<i class="bi bi-broadcast text-success fs-5"></i>'
-                  : '<i class="bi bi-eye-slash text-muted fs-5"></i>')
-              }
+
+            <!-- Bottom Row: Username + Route & Remove Action Buttons -->
+            <div class="d-flex align-items-center justify-content-between mt-2 pt-2 border-top border-secondary border-opacity-20" onclick="event.stopPropagation()">
+              <span class="member-username-text text-truncate">@${item.username}</span>
+              <div class="d-flex align-items-center gap-1.5">
+                <button class="btn btn-sm btn-action-route" title="View Route History" onclick="app.viewLocationHistory(${item.user_id}, '${item.full_name.replace(/'/g, "\\'")}')">
+                  <i class="bi bi-clock-history me-1"></i>Route
+                </button>
+                <button class="btn btn-sm btn-action-remove" title="Remove Member" onclick="app.removeFriend(${item.user_id}, '${item.full_name.replace(/'/g, "\\'")}')">
+                  <i class="bi bi-person-x me-1"></i>Remove
+                </button>
+              </div>
             </div>
           </div>
         `;
