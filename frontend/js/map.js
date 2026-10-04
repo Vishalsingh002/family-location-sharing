@@ -31,11 +31,11 @@ class MapManager {
       attributionControl: false
     }).setView([28.6139, 77.2090], 15);
 
-    // Blazing-fast Retina CDN Road Tiles (CartoDB Voyager)
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-      maxZoom: 20,
-      subdomains: 'abcd',
-      attribution: '&copy; OpenStreetMap, &copy; CARTO'
+    // Official Clean OpenStreetMap Tiles (100% Free, Zero Watermark, Zero API Key Required)
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      subdomains: ['a', 'b', 'c'],
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
     }).addTo(this.map);
 
     this.map.invalidateSize();
