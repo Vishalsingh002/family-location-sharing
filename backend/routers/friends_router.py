@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from backend.database import get_db
-from backend.models import User, Friend, FriendRequest, Notification
+from backend.models import User, Friend, FriendRequest, Notification, GroupMember
 from backend.schemas import FriendRequestCreate
 from backend.auth import get_current_user
 
@@ -149,22 +149,63 @@ def remove_friend(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    target = db.query(User).filter(User.id == friend_user_id).first()
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found.")
+
     f1 = db.query(Friend).filter(Friend.user_id == current_user.id, Friend.friend_id == friend_user_id).first()
     f2 = db.query(Friend).filter(Friend.user_id == friend_user_id, Friend.friend_id == current_user.id).first()
 
-    if not f1 and not f2:
+    # Find any shared circles where current_user is admin
+    my_admin_groups = [
+        gm.group_id for gm in db.query(GroupMember).filter(
+            GroupMember.user_id == current_user.id,
+            GroupMember.role == "admin"
+        ).all()
+    ]
+    target_memberships_in_my_groups = db.query(GroupMember).filter(
+        GroupMember.user_id == friend_user_id,
+        GroupMember.group_id.in_(my_admin_groups)
+    ).all() if my_admin_groups else []
+
+    has_friendship = bool(f1 or f2)
+    has_admin_group = bool(target_memberships_in_my_groups)
+
+    # Check if they share any groups at all
+    my_all_groups = [
+        gm.group_id for gm in db.query(GroupMember).filter(
+            GroupMember.user_id == current_user.id
+        ).all()
+    ]
+    shared_group_count = db.query(GroupMember).filter(
+        GroupMember.user_id == friend_user_id,
+        GroupMember.group_id.in_(my_all_groups)
+    ).count() if my_all_groups else 0
+
+    if not has_friendship and not has_admin_group and shared_group_count == 0:
         raise HTTPException(status_code=404, detail="Member not found in your family list.")
 
+    # 1. Delete friendships
     if f1:
         db.delete(f1)
     if f2:
         db.delete(f2)
 
-    # Clean up any past requests between both users
+    # 2. Delete friend requests
     db.query(FriendRequest).filter(
         ((FriendRequest.sender_id == current_user.id) & (FriendRequest.receiver_id == friend_user_id)) |
         ((FriendRequest.sender_id == friend_user_id) & (FriendRequest.receiver_id == current_user.id))
     ).delete(synchronize_session=False)
 
+    # 3. Remove from admin circles
+    for gm in target_memberships_in_my_groups:
+        db.delete(gm)
+
     db.commit()
-    return {"message": "Family member removed successfully."}
+
+    if not has_friendship and not has_admin_group and shared_group_count > 0:
+        return {
+            "message": f"{target.full_name} is in a circle where you are not admin. You can leave that circle from the Circles tab to disconnect."
+        }
+
+    return {"message": f"{target.full_name} removed from family list."}

@@ -634,14 +634,19 @@ class App {
         return;
       }
       list.innerHTML = groups.map(g => `
-        <div class="member-card d-block">
+        <div class="member-card d-block" style="cursor: pointer;" onclick="app.viewGroupMembers(${g.id}, '${g.name.replace(/'/g, "\\'")}')">
           <div class="d-flex justify-content-between align-items-center mb-1">
             <span class="fw-bold text-main" style="font-size: 14.5px;"><i class="bi bi-diagram-3 me-1 text-primary"></i>${g.name}</span>
-            <span class="badge bg-primary bg-opacity-15 text-primary border border-primary border-opacity-25 rounded-pill" style="font-size: 11px;">${g.member_count} ${g.member_count === 1 ? 'member' : 'members'}</span>
+            <button class="btn btn-sm btn-outline-primary py-0.5 px-2 rounded-pill d-flex align-items-center gap-1" style="font-size: 11px;" onclick="event.stopPropagation(); app.viewGroupMembers(${g.id}, '${g.name.replace(/'/g, "\\'")}')">
+              <i class="bi bi-people-fill"></i><span>${g.member_count} ${g.member_count === 1 ? 'member' : 'members'}</span><i class="bi bi-chevron-right ms-0.5" style="font-size: 9px;"></i>
+            </button>
           </div>
           <div class="d-flex align-items-center justify-content-between mt-2 pt-1 border-top border-secondary border-opacity-20">
             <div class="small text-muted" style="font-size: 11.5px;">Code: <code class="text-primary fw-bold" style="font-size: 13px; letter-spacing: 0.5px;">${g.invite_code}</code></div>
-            <div class="d-flex gap-1">
+            <div class="d-flex gap-1" onclick="event.stopPropagation()">
+              <button class="btn btn-sm btn-outline-primary py-0 px-2 rounded-3" style="font-size: 11px;" onclick="event.stopPropagation(); app.viewGroupMembers(${g.id}, '${g.name.replace(/'/g, "\\'")}')" title="View Circle Members">
+                <i class="bi bi-people me-1"></i>Members
+              </button>
               <button class="btn btn-sm btn-outline-secondary py-0 px-2 rounded-3" style="font-size: 11px;" onclick="event.stopPropagation(); app.copyInviteCode('${g.invite_code}', this)" title="Copy Invite Code">
                 <i class="bi bi-clipboard me-1"></i>Copy
               </button>
@@ -662,6 +667,165 @@ class App {
     }
   }
 
+  async viewGroupMembers(groupId, groupName) {
+    if (!this.token) return;
+    this.activeGroupId = groupId;
+    this.activeGroupName = groupName;
+    this.activeGroupInviteCode = '';
+
+    const modalEl = document.getElementById('circleMembersModal');
+    const titleEl = document.getElementById('circleMembersModalTitle');
+    const subtitleEl = document.getElementById('circleMembersModalSubtitle');
+    const codeEl = document.getElementById('circleMembersInviteCode');
+    const badgeEl = document.getElementById('circleMembersCountBadge');
+    const listEl = document.getElementById('circleMembersListContainer');
+
+    if (titleEl) titleEl.innerHTML = `<i class="bi bi-diagram-3 me-2 text-primary"></i>${groupName}`;
+    if (subtitleEl) subtitleEl.innerText = 'Loading circle members...';
+    if (codeEl) codeEl.innerText = '--------';
+    if (badgeEl) badgeEl.innerText = '...';
+    if (listEl) {
+      listEl.innerHTML = `
+        <div class="text-center text-muted small py-4">
+          <div class="spinner-border spinner-border-sm text-primary mb-2" role="status"></div>
+          <div>Loading members...</div>
+        </div>
+      `;
+    }
+
+    if (modalEl) {
+      const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+      modal.show();
+    }
+
+    try {
+      const res = await this.authFetch(`/api/groups/${groupId}/members`);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: 'Failed to load members' }));
+        if (listEl) listEl.innerHTML = `<div class="text-danger small py-3">${err.detail || 'Could not load members.'}</div>`;
+        return;
+      }
+
+      const data = await res.json();
+      this.activeGroupInviteCode = data.invite_code;
+      if (codeEl) codeEl.innerText = data.invite_code;
+      if (badgeEl) badgeEl.innerText = `${data.total_members} ${data.total_members === 1 ? 'member' : 'members'}`;
+      if (subtitleEl) subtitleEl.innerText = `${data.total_members} ${data.total_members === 1 ? 'member' : 'members'} in this circle`;
+
+      if (!data.members || data.members.length === 0) {
+        if (listEl) listEl.innerHTML = `<div class="text-muted small text-center py-3">No members found in this circle.</div>`;
+        return;
+      }
+
+      if (listEl) {
+        listEl.innerHTML = data.members.map(m => {
+          const avatarHtml = m.avatar_url
+            ? `<img src="${m.avatar_url}" alt="${m.full_name}" class="rounded-circle" style="width: 38px; height: 38px; object-fit: cover;">`
+            : `<div class="rounded-circle bg-primary bg-opacity-15 text-primary d-flex align-items-center justify-content-center fw-bold" style="width: 38px; height: 38px; font-size: 15px;">${m.full_name[0].toUpperCase()}</div>`;
+
+          const roleBadge = m.role === 'admin'
+            ? `<span class="badge bg-warning bg-opacity-20 text-warning border border-warning border-opacity-25 rounded-pill px-2 py-0.5" style="font-size: 10px;"><i class="bi bi-shield-fill-check me-1"></i>Admin</span>`
+            : `<span class="badge bg-secondary bg-opacity-20 text-body-secondary rounded-pill px-2 py-0.5" style="font-size: 10px;">Member</span>`;
+
+          const youBadge = m.is_me
+            ? `<span class="badge bg-primary rounded-pill px-1.5 py-0.5 ms-1" style="font-size: 9.5px;">You</span>`
+            : '';
+
+          let liveBadge = '';
+          if (m.is_sos) {
+            liveBadge = `<span class="text-danger fw-bold small"><i class="bi bi-exclamation-triangle-fill me-1"></i>SOS</span>`;
+          } else if (m.is_live) {
+            liveBadge = `<span class="text-success fw-semibold small d-flex align-items-center gap-1"><span class="status-pulse-dot"></span>Live ${m.battery_level !== null ? `<span class="text-muted ms-1"><i class="bi bi-lightning-fill text-success"></i>${m.battery_level}%</span>` : ''}</span>`;
+          } else {
+            liveBadge = `<span class="text-muted small"><i class="bi bi-cloud-slash me-1"></i>Offline</span>`;
+          }
+
+          const canRemove = data.is_admin && !m.is_me;
+          const canLocate = Boolean(m.latitude && m.longitude);
+
+          return `
+            <div class="p-2.5 rounded-3 border border-secondary border-opacity-20 bg-body-tertiary d-flex align-items-center justify-content-between gap-2">
+              <div class="d-flex align-items-center gap-2.5 min-w-0">
+                <div class="position-relative flex-shrink-0">
+                  ${avatarHtml}
+                  ${m.is_live ? `<span class="position-absolute bottom-0 end-0 p-1 bg-success border border-2 border-white rounded-circle"></span>` : ''}
+                </div>
+                <div class="overflow-hidden">
+                  <div class="fw-bold text-truncate" style="font-size: 13.5px;">
+                    ${m.full_name} ${youBadge}
+                  </div>
+                  <div class="d-flex align-items-center gap-1.5 flex-wrap mt-0.5">
+                    ${roleBadge}
+                    ${liveBadge}
+                  </div>
+                </div>
+              </div>
+              <div class="flex-shrink-0 d-flex align-items-center gap-1">
+                ${canLocate ? `
+                  <button class="btn btn-sm btn-outline-primary py-1 px-2 rounded-3 d-flex align-items-center gap-1" style="font-size: 11px;" onclick="app.locateMemberFromModal(${m.latitude}, ${m.longitude})">
+                    <i class="bi bi-crosshair"></i><span class="d-none d-sm-inline">Locate</span>
+                  </button>
+                ` : ''}
+                ${canRemove ? `
+                  <button class="btn btn-sm btn-outline-danger py-1 px-2 rounded-3 d-flex align-items-center gap-1" style="font-size: 11px;" onclick="app.removeMemberFromGroup(${groupId}, ${m.user_id}, '${m.full_name.replace(/'/g, "\\'")}')" title="Remove from Circle">
+                    <i class="bi bi-person-x"></i><span class="d-none d-sm-inline">Remove</span>
+                  </button>
+                ` : ''}
+              </div>
+            </div>
+          `;
+        }).join('');
+      }
+    } catch (e) {
+      if (listEl) listEl.innerHTML = `<div class="text-danger small py-3">Error loading circle members: ${e.message}</div>`;
+    }
+  }
+
+  locateMemberFromModal(lat, lng) {
+    const modalEl = document.getElementById('circleMembersModal');
+    if (modalEl) {
+      const modal = bootstrap.Modal.getInstance(modalEl);
+      if (modal) modal.hide();
+    }
+    const sidebar = document.getElementById('mainSidebar');
+    if (sidebar && window.innerWidth <= 768) {
+      sidebar.classList.add('collapsed');
+      document.body.classList.remove('sheet-expanded');
+      document.body.classList.add('sheet-collapsed');
+    }
+    if (window.mapManager) {
+      mapManager.focusLocation(lat, lng);
+    }
+  }
+
+  async removeMemberFromGroup(groupId, targetUserId, targetName) {
+    if (!confirm(`Are you sure you want to remove "${targetName}" from circle "${this.activeGroupName || 'this circle'}"?`)) return;
+    try {
+      const res = await this.authFetch(`/api/groups/${groupId}/members/${targetUserId}`, { method: 'DELETE' });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        this.showToast(data.message || `${targetName} removed from circle.`, 'info');
+        this._lastFeedHash = null;
+        if (window.mapManager && mapManager.markers && mapManager.markers[targetUserId]) {
+          mapManager.markers[targetUserId].remove();
+          delete mapManager.markers[targetUserId];
+        }
+        await this.viewGroupMembers(groupId, this.activeGroupName);
+        await this.loadGroups();
+        await this.loadFamilyFeed();
+      } else {
+        this.showToast(data.detail || 'Could not remove member from circle.', 'danger');
+      }
+    } catch (e) {
+      this.showToast('Network error: ' + e.message, 'danger');
+    }
+  }
+
+  copyCurrentCircleInviteCode(btn) {
+    if (!this.activeGroupInviteCode) return;
+    this.copyInviteCode(this.activeGroupInviteCode, btn);
+  }
+
   async leaveGroup(groupId, groupName) {
     if (!confirm(`Are you sure you want to leave circle "${groupName}"?`)) return;
     try {
@@ -669,6 +833,7 @@ class App {
       const data = await res.json().catch(() => ({}));
       if (res.ok) {
         this.showToast(`You left circle "${groupName}".`, 'info');
+        this._lastFeedHash = null;
         await this.loadGroups();
         await this.loadFamilyFeed();
       } else {
@@ -686,6 +851,7 @@ class App {
       const data = await res.json().catch(() => ({}));
       if (res.ok) {
         this.showToast(data.message || `Circle "${groupName}" deleted.`, 'info');
+        this._lastFeedHash = null;
         await this.loadGroups();
         await this.loadFamilyFeed();
       } else {
@@ -703,7 +869,13 @@ class App {
       const data = await res.json().catch(() => ({}));
       if (res.ok) {
         this.showToast(data.message || `${friendName} removed from family list.`, 'info');
+        this._lastFeedHash = null;
+        if (window.mapManager && mapManager.markers && mapManager.markers[friendUserId]) {
+          mapManager.markers[friendUserId].remove();
+          delete mapManager.markers[friendUserId];
+        }
         await this.loadFamilyFeed();
+        await this.loadGroups();
       } else {
         this.showToast(data.detail || 'Could not remove member.', 'danger');
       }
