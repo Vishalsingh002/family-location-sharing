@@ -31,11 +31,11 @@ class MapManager {
       attributionControl: false
     }).setView([28.6139, 77.2090], 15);
 
-    // Official Clean OpenStreetMap Tiles (100% Free, Zero Watermark, Zero API Key Required)
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 19,
-      subdomains: ['a', 'b', 'c'],
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+    // High-Resolution Google Maps Road & Landmark Layer (Exact view as requested)
+    this.tileLayer = L.tileLayer('https://{s}.google.com/vt/lyrs=m&x={x}&y={y}&z={z}', {
+      maxZoom: 20,
+      subdomains: ['mt0', 'mt1', 'mt2', 'mt3'],
+      attribution: '&copy; Google Maps'
     }).addTo(this.map);
 
     this.map.invalidateSize();
