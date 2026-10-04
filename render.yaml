@@ -18,4 +18,4 @@ services:
       - key: ACCESS_TOKEN_EXPIRE_MINUTES
         value: "525600"
       - key: DATABASE_URL
-        value: sqlite:///./family_locator.db
+        sync: false
