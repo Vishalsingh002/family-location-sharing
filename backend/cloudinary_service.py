@@ -140,8 +140,9 @@ def upload_avatar(image_data: Union[str, bytes], user_id: int) -> str:
     """
     Uploads user avatar to Cloudinary CDN and returns high-speed secure HTTPS URL.
     - If Cloudinary upload is successful, returns secure CDN URL.
-    - If Cloudinary has restricted permissions or errors, saves locally to static uploads folder.
-    - If image_data is already a hosted URL (http/https), returns as is.
+    - If Cloudinary fails or has restricted permissions, returns persistent compressed base64
+      data URL so the image is stored directly in database and NEVER deleted on code updates!
+    - Also saves a local backup in frontend/uploads/avatars/.
     """
     if not image_data:
         return image_data
@@ -170,7 +171,19 @@ def upload_avatar(image_data: Union[str, bytes], user_id: int) -> str:
                 logger.info("Uploaded avatar to Cloudinary successfully: %s", secure_url)
                 return secure_url
         except Exception as e:
-            logger.warning("Cloudinary avatar upload rejected (%s); saving locally to static uploads.", e)
+            logger.warning("Cloudinary avatar upload rejected (%s); storing persistent image in database.", e)
 
-    # Reliable local fallback
+    # Save local copy for offline static file serving
+    _save_avatar_locally(image_data, user_id)
+
+    # 100% Persistent Storage in DB Text column:
+    # Storing the compressed base64 data URL directly ensures that ANY code update,
+    # git push, git checkout, or container restart NEVER loses or wipes the user's profile image!
+    if isinstance(image_data, str) and image_data.startswith("data:image"):
+        return image_data
+
+    if isinstance(image_data, bytes):
+        import base64
+        return f"data:image/jpeg;base64,{base64.b64encode(image_data).decode('utf-8')}"
+
     return _save_avatar_locally(image_data, user_id)

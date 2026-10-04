@@ -15,7 +15,11 @@ env/
 ENV/
 .venv/
 
-# SQLite runtime temporary files
+# SQLite runtime database and temporary files
+family_locator.db
+*.db
+*.sqlite
+*.sqlite3
 *.db-shm
 *.db-wal
 *.sqlite3-shm
