@@ -65,6 +65,12 @@ def serve_auth_hero():
 def serve_favicon():
     return FileResponse(FRONTEND_DIR / "favicon.ico.png")
 
+# Silence third-party browser extension tracker pings (e.g. zybTrackerStatisticsAction)
+@app.get("/hybridaction/{path:path}")
+@app.post("/hybridaction/{path:path}")
+def ignore_browser_extension_tracking(path: str):
+    return {"status": "ok"}
+
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", 8000))
